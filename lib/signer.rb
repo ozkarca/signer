@@ -7,12 +7,13 @@ require "signer/digester"
 require "signer/version"
 
 class Signer
-  attr_accessor :document, :private_key, :signature_algorithm_id
+  attr_accessor :document, :private_key, :signature_algorithm_id, :security_token_identifier
   attr_reader :cert
   attr_writer :security_node, :signature_node, :security_token_id
 
   WSU_NAMESPACE = 'http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd'
   WSSE_NAMESPACE = 'http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd'
+  WSSC_NAMESPACE = 'http://schemas.xmlsoap.org/ws/2005/02/sc'
 
   def initialize(document)
     self.document = Nokogiri::XML(document.to_s, &:noblanks)
@@ -143,6 +144,31 @@ class Signer
     node
   end
 
+  def security_context_token_node
+    node = document.at_xpath('wssc:SecurityContextToken', wssc: WSSC_NAMESPACE)
+    unless node
+      node = Nokogiri::XML::Node.new('SecurityContextToken', document)
+      node['xmlns:c'] = 'http://schemas.xmlsoap.org/ws/2005/02/sc'
+      signature_node.add_previous_sibling(node)
+      wsse_ns = namespace_prefix(node, WSSE_NAMESPACE, 'wsse')
+      wsu_ns = namespace_prefix(node, WSU_NAMESPACE, 'wsu')
+      node["#{wsu_ns}:Id"] = security_token_id
+      identifier_node = Nokogiri::XML::Node.new('c:Identifier', document)
+      identifier_node.content = security_token_identifier
+      node.add_child(identifier_node)
+
+      key_info_node = Nokogiri::XML::Node.new('KeyInfo', document)
+      security_token_reference_node = Nokogiri::XML::Node.new("#{wsse_ns}:SecurityTokenReference", document)
+      key_info_node.add_child(security_token_reference_node)
+      reference_node = Nokogiri::XML::Node.new("#{wsse_ns}:Reference", document)
+      reference_node['ValueType'] = 'http://schemas.xmlsoap.org/ws/2005/02/sc/sct'
+      reference_node['URI'] = "##{security_token_id}"
+      security_token_reference_node.add_child(reference_node)
+      signed_info_node.add_next_sibling(key_info_node)
+    end
+    node
+  end
+
   # <KeyInfo>
   #   <X509Data>
   #     <X509IssuerSerial>
@@ -254,6 +280,10 @@ class Signer
   def sign!(options = {})
     if options[:security_token]
       binary_security_token_node
+    end
+
+    if options[:security_context_token]
+      security_context_token_node
     end
 
     if options[:issuer_serial]
