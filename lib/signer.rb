@@ -148,7 +148,7 @@ class Signer
     node = document.at_xpath('wssc:SecurityContextToken', wssc: WSSC_NAMESPACE)
     unless node
       node = Nokogiri::XML::Node.new('SecurityContextToken', document)
-      node['xmlns:c'] = 'http://schemas.xmlsoap.org/ws/2005/02/sc'
+      node_ns = node.add_namespace_definition("c",WSSC_NAMESPACE)
       signature_node.add_previous_sibling(node)
       wsse_ns = namespace_prefix(node, WSSE_NAMESPACE, 'wsse')
       wsu_ns = namespace_prefix(node, WSU_NAMESPACE, 'wsu')
@@ -156,6 +156,7 @@ class Signer
       identifier_node = Nokogiri::XML::Node.new('c:Identifier', document)
       identifier_node.content = security_token_identifier
       node.add_child(identifier_node)
+      node.namespace = node_ns
 
       key_info_node = Nokogiri::XML::Node.new('KeyInfo', document)
       security_token_reference_node = Nokogiri::XML::Node.new("#{wsse_ns}:SecurityTokenReference", document)
@@ -309,6 +310,29 @@ class Signer
     self
   end
 
+  def sign_hmac!(client_secret, server_secret, options = {})
+    security_context_token_node
+
+    if options[:inclusive_namespaces]
+      c14n_method_node = signed_info_node.at_xpath('ds:CanonicalizationMethod', ds: 'http://www.w3.org/2000/09/xmldsig#')
+      inclusive_namespaces_node = Nokogiri::XML::Node.new('ec:InclusiveNamespaces', document)
+      inclusive_namespaces_node.add_namespace_definition('ec', c14n_method_node['Algorithm'])
+      inclusive_namespaces_node['PrefixList'] = options[:inclusive_namespaces].join(' ')
+      c14n_method_node.add_child(inclusive_namespaces_node)
+    end
+
+    signed_info_canon = canonicalize(signed_info_node, options[:inclusive_namespaces])
+    key = psha1(Base64.decode64(client_secret), Base64.decode64(server_secret))
+    signature = OpenSSL::HMAC.digest(OpenSSL::Digest.new('sha1'), key, signed_info_canon)    
+    signature_value_digest = Base64.encode64(signature).gsub("\n", '')
+
+    signature_value_node = Nokogiri::XML::Node.new('SignatureValue', document)
+    signature_value_node.content = signature_value_digest
+    signed_info_node.add_next_sibling(signature_value_node)
+    self
+  end
+
+
   protected
 
   # Reset digest algorithm for signature creation and signature algorithm identifier
@@ -334,4 +358,34 @@ class Signer
     end
   end
 
+  def psha1(client_secret, server_secret, size_bits=256)
+    size_bytes = (size_bits/8)
+    hmackey = client_secret
+    hash_size = 160
+    buffersize = (hash_size/8) + server_secret.length
+    i=0
+
+    b1 = server_secret
+    b2 = ""
+    temp=nil
+    psha = Array.new
+
+    while i < size_bytes do
+      b1 = OpenSSL::HMAC.digest(OpenSSL::Digest.new('sha1'),hmackey,b1)
+      b2 = b1 + server_secret
+      temp = OpenSSL::HMAC.digest(OpenSSL::Digest.new('sha1'),hmackey,b2)
+
+      j=0
+      while j < temp.length do
+       if i < size_bytes
+          psha[i] = temp[j]
+          i = i +1
+       else
+         break
+       end
+       j = j+1
+      end
+    end
+    psha.join
+  end
 end
