@@ -295,7 +295,6 @@ class Signer
   # * [+:security_token+]       Serializes certificate in DER format, encodes it with Base64 and inserts it within +<BinarySecurityToken>+ tag
   # * [+:issuer_serial+]
   # * [+:inclusive_namespaces+] Array of namespace prefixes which definitions should be added to signed info node during canonicalization
-
   def sign!(options = {})
     if options[:security_token]
       binary_security_token_node
@@ -349,6 +348,17 @@ class Signer
     self
   end
 
+  def get_signed_info(options = {})
+    binary_security_token_node
+    signed_info_canon = canonicalize(signed_info_node, options[:inclusive_namespaces])
+  end
+
+  def sign_from_hsm!(signature, options = {})
+    signature_value_node = Nokogiri::XML::Node.new('SignatureValue', document)
+    signature_value_node.content = signature
+    signed_info_node.add_next_sibling(signature_value_node)
+    self
+  end
 
   protected
 
